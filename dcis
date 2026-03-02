@@ -1,0 +1,1452 @@
+
+
+#!/usr/bin/env python3
+"""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║          DISTILLATION COLUMN INTELLIGENCE SYSTEM  (DCIS v1.0)              ║
+║          Advanced Fault Diagnosis & Corrective Action Engine               ║
+║          Enhanced with LangGraph Processing                                ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+"""
+
+import json, time, sys, os, math
+from dataclasses import dataclass, asdict
+from typing import Optional, TypedDict, Sequence
+from datetime import datetime
+import requests
+from operator import add
+
+# Python 3.9+ has Annotated in typing, older versions need typing_extensions
+try:
+    from typing import Annotated
+except ImportError:
+    try:
+        from typing_extensions import Annotated
+    except ImportError:
+        print("\033[91m" + "="*80)
+        print("ERROR: Python version incompatibility!")
+        print("="*80 + "\033[0m")
+        print()
+        print("\033[93mThis system requires Python 3.9+ OR typing_extensions package.\033[0m")
+        print("\033[93mPlease upgrade Python or install typing_extensions:\033[0m")
+        print()
+        print("    \033[96mpip install typing_extensions\033[0m")
+        print()
+        sys.exit(1)
+
+# LangGraph imports - REQUIRED
+# NOTE: LangGraph requires Python 3.9 or higher
+try:
+    from langgraph.graph import StateGraph, END
+    from langgraph.checkpoint.memory import MemorySaver
+    print(f"\033[92m✓ LangGraph loaded successfully\033[0m")
+except ImportError as e:
+    print("\033[91m" + "="*80)
+    print("ERROR: LangGraph is not installed!")
+    print("="*80 + "\033[0m")
+    print()
+    print(f"\033[93mThis system REQUIRES LangGraph to function.\033[0m")
+    print(f"\033[93mYour Python version: {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}\033[0m")
+    print()
+    if sys.version_info < (3, 9):
+        print("\033[91m⚠ LangGraph requires Python 3.9 or higher!\033[0m")
+        print("\033[93mYour current Python version is too old.\033[0m")
+        print()
+        print("\033[96mPlease upgrade Python to 3.9+ or create a new virtual environment:\033[0m")
+        print()
+        print("    \033[96mpython3.9 -m venv .venv\033[0m")
+        print("    \033[96m.venv\\Scripts\\Activate.ps1\033[0m  (Windows)")
+        print("    \033[96mpip install -r requirements.txt\033[0m")
+    else:
+        print("\033[93mPlease install it using:\033[0m")
+        print()
+        print("    \033[96mpip install langgraph\033[0m")
+        print()
+        print("Or install all dependencies:")
+        print()
+        print("    \033[96mpip install -r requirements.txt\033[0m")
+    print()
+    sys.exit(1)
+
+# ═══════════════════════════ ENVIRONMENT DETECTION ═════════════════════════
+def is_colab():
+    """Detect if running in Google Colab"""
+    try:
+        import google.colab
+        return True
+    except ImportError:
+        return False
+
+IS_COLAB = is_colab()
+
+# ═══════════════════════════ GEMINI CONFIG ══════════════════════════════════
+GOOGLE_API_KEY = "AIzaSyCKOmPnaaGjYsFUwaodjOl0rM7T54Q6CqY"
+GEMINI_MODEL    = "gemini-2.0-flash-exp"
+GEMINI_API_URL  = (
+    f"https://generativelanguage.googleapis.com/v1beta/models/"
+    f"{GEMINI_MODEL}:generateContent?key={GOOGLE_API_KEY}"
+)
+GEMINI_ENABLED  = True   # AI commentary enabled - uses Gemini API for enhanced analysis
+GEMINI_TIMEOUT  = 15     # Timeout in seconds for API calls (increased for reliability)
+
+
+# ═══════════════════════════ ANSI STYLES ════════════════════════════════════
+# Disable ANSI codes in Google Colab for better compatibility
+if IS_COLAB:
+    # No colors in Colab
+    R = ""
+    BOLD = ""; DIM = ""; ITAL = ""; ULINE = ""; BLINK = ""
+    BLACK = ""; RED = ""; GREEN = ""; YELLOW = ""
+    BLUE = ""; MAG = ""; CYAN = ""; WHITE = ""
+    BBLACK = ""; BRED = ""; BGREEN = ""; BYELLOW = ""
+    BBLUE = ""; BMAG = ""; BCYAN = ""; BWHITE = ""
+    BG_BLACK = ""; BG_RED = ""; BG_GREEN = ""
+    BG_YELLOW = ""; BG_BLUE = ""; BG_MAG = ""
+    BG_CYAN = ""; BG_WHITE = ""
+    BG_BBLACK = ""; BG_BRED = ""; BG_BGREEN = ""
+    BG_BYELLOW = ""
+else:
+    # Full ANSI colors for terminal
+    R = "\033[0m"
+    BOLD= "\033[1m"; DIM = "\033[2m"; ITAL= "\033[3m"; ULINE="\033[4m"
+    BLINK="\033[5m"
+    # Foreground
+    BLACK="\033[30m"; RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"
+    BLUE ="\033[34m"; MAG ="\033[35m"; CYAN ="\033[36m"; WHITE="\033[37m"
+    BBLACK="\033[90m"; BRED="\033[91m"; BGREEN="\033[92m"; BYELLOW="\033[93m"
+    BBLUE ="\033[94m"; BMAG ="\033[95m"; BCYAN ="\033[96m"; BWHITE="\033[97m"
+    # Backgrounds
+    BG_BLACK="\033[40m"; BG_RED="\033[41m"; BG_GREEN="\033[42m"
+    BG_YELLOW="\033[43m"; BG_BLUE="\033[44m"; BG_MAG="\033[45m"
+    BG_CYAN="\033[46m"; BG_WHITE="\033[47m"
+    BG_BBLACK="\033[100m"; BG_BRED="\033[101m"; BG_BGREEN="\033[102m"
+    BG_BYELLOW="\033[103m"
+
+W = 80  # console width
+
+# ═══════════════════════════ UTILITIES ══════════════════════════════════════
+def clr():
+    if not IS_COLAB:
+        os.system("cls" if os.name == "nt" else "clear")
+    else:
+        # In Colab, just print some newlines
+        print("\n" * 3)
+
+def typewrite(text, delay=0.018, color=""):
+    for ch in text:
+        sys.stdout.write(color + ch + R)
+        sys.stdout.flush()
+        time.sleep(delay)
+    print()
+
+def pause(s=0.6):
+    time.sleep(s)
+
+def center(text, width=W):
+    return text.center(width)
+
+def hline(char="═", color=BBLUE, width=W):
+    print(color + char * width + R)
+
+def thin_line(color=BBLACK):
+    print(color + "─" * W + R)
+
+def box_line(left="║", right="║", fill=" ", color=BBLUE, width=W):
+    inner = fill * (width - 2)
+    print(color + left + inner + right + R)
+
+def spinner(msg, duration=1.4):
+    frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+    end = time.time() + duration
+    i = 0
+    while time.time() < end:
+        sys.stdout.write(f"\r  {BCYAN}{frames[i % len(frames)]}{R}  {BWHITE}{msg}{R}   ")
+        sys.stdout.flush()
+        time.sleep(0.08)
+        i += 1
+    sys.stdout.write("\r" + " " * 60 + "\r")
+
+def progress_bar(label, steps=30, color=BCYAN, delay=0.03):
+    print(f"  {BWHITE}{label}{R}")
+    bar = ""
+    for i in range(steps + 1):
+        filled = int((i / steps) * 25)
+        bar = "█" * filled + "░" * (25 - filled)
+        pct = int((i / steps) * 100)
+        try:
+            sys.stdout.write(f"  {color}[{bar}]{R} {BYELLOW}{pct:3d}%{R}\r")
+            sys.stdout.flush()
+            time.sleep(delay)
+        except (KeyboardInterrupt, SystemExit):
+            print()
+            raise
+        except:
+            # If stdout fails, just skip the visual update
+            time.sleep(delay)
+    print()
+
+def badge(text, bg=BG_BBLACK, fg=BWHITE):
+    return f"{bg}{fg} {text} {R}"
+
+def severity_badge(sev):
+    m = {"CRITICAL": BG_BRED + BWHITE + BOLD,
+         "WARNING":  BG_BYELLOW + BLACK + BOLD,
+         "INFO":     BG_CYAN + BLACK + BOLD}
+    return f"{m[sev]} {sev} {R}"
+
+def confidence_badge(conf):
+    m = {"HIGH":   BGREEN + BOLD, "MEDIUM": BYELLOW + BOLD, "LOW": BBLACK + BOLD}
+    return f"{m[conf]}◉ {conf}{R}"
+
+def icon_line(icon, text, color=BWHITE, indent=4):
+    print(" " * indent + f"{icon}  {color}{text}{R}")
+
+def numbered_box(items, color=BCYAN, indent=4):
+    for i, item in enumerate(items, 1):
+        print(" " * indent + f"{BBLACK}{i:2d}{R}  {color}{item}{R}")
+
+def bullet_list(items, bullet="›", color=BWHITE, indent=4):
+    for item in items:
+        print(" " * indent + f"{BYELLOW}{bullet}{R}  {color}{item}{R}")
+
+def print_kv(key, val, key_color=BCYAN, val_color=BWHITE, indent=4, width=28):
+    k = f"{key_color}{key:<{width}}{R}"
+    v = f"{val_color}{val}{R}"
+    print(" " * indent + k + v)
+
+# ═══════════════════════════ SPLASH SCREEN ══════════════════════════════════
+def splash():
+    clr()
+    pause(0.2)
+
+    if IS_COLAB:
+        # Simplified splash for Colab
+        print("=" * 80)
+        print("  DISTILLATION COLUMN INTELLIGENCE SYSTEM (DCIS v2.0)".center(80))
+        print("  Fault Diagnosis & Corrective Action Engine".center(80))
+        print("-" * 80)
+        print("  Chemical Process Intelligence · Enhanced with LangGraph + Gemini AI".center(80))
+        print("=" * 80)
+        print()
+        print("  SYSTEM STATUS:")
+        print(f"    Environment: Google Colab")
+        ai_status = "Enabled" if GEMINI_ENABLED else "Disabled"
+        print(f"    LangGraph Workflow: Enabled")
+        print(f"    Gemini AI Enhancement: {ai_status}")
+        print("-" * 80)
+        print("  FAULTS MONITORED:")
+        print("    FLOODING | WEEPING | FOAMING | ENTRAINMENT | FOULING | REBOILER | PRESSURE")
+        print("-" * 80)
+        print()
+        return
+
+    # Original fancy splash for terminal
+    lines = [
+        "",
+        f"{BBLUE}{'═'*W}{R}",
+        f"{BBLUE}║{R}{BG_BBLACK}{BWHITE + BOLD}{'':^78}{R}{BBLUE}║{R}",
+        f"{BBLUE}║{R}{BG_BBLACK}{BCYAN + BOLD}{'DISTILLATION COLUMN INTELLIGENCE SYSTEM':^78}{R}{BBLUE}║{R}",
+        f"{BBLUE}║{R}{BG_BBLACK}{BWHITE}{'DCIS  v2.0  ·  Fault Diagnosis & Corrective Action Engine':^78}{R}{BBLUE}║{R}",
+        f"{BBLUE}║{R}{BG_BBLACK}{BBLACK}{'─'*78}{R}{BBLUE}║{R}",
+        f"{BBLUE}║{R}{BG_BBLACK}{BYELLOW}{'⚗  Chemical Process Intelligence  ·  Enhanced with LangGraph + Gemini AI':^78}{R}{BBLUE}║{R}",
+        f"{BBLUE}║{R}{BG_BBLACK}{BWHITE + DIM}{'':^78}{R}{BBLUE}║{R}",
+        f"{BBLUE}{'═'*W}{R}",
+    ]
+    for ln in lines:
+        print(ln)
+        pause(0.07)
+
+    pause(0.3)
+    print()
+
+    # Show system status
+    print(f"{BBLACK}  {'─'*76}{R}")
+    print(f"  {BOLD}SYSTEM STATUS:{R}")
+    ai_status = f"{BGREEN}✓ Enabled{R}" if GEMINI_ENABLED else f"{BYELLOW}○ Disabled{R}"
+    print(f"    {BCYAN}LangGraph Workflow:{R}  {BGREEN}✓ Enabled{R}")
+    print(f"    {BCYAN}Gemini AI Enhancement:{R}  {ai_status}")
+    print(f"{BBLACK}  {'─'*76}{R}")
+    print()
+    cols = [
+        (BRED,    "⚠ FLOODING"),
+        (BYELLOW, "〰 WEEPING"),
+        (BMAG,    "🫧 FOAMING"),
+        (BCYAN,   "💨 ENTRAINMENT"),
+        (BGREEN,  "🔩 FOULING"),
+        (BYELLOW, "🔥 REBOILER"),
+        (BBLUE,   "⊞ PRESSURE"),
+    ]
+    row = "".join(f"  {c}{BOLD}{t:<16}{R}" for c, t in cols[:4])
+    row2 = "".join(f"  {c}{BOLD}{t:<16}{R}" for c, t in cols[4:])
+    print(f"{BBLACK}  {'─'*76}{R}")
+    print(f"  {DIM}FAULTS MONITORED:{R}"); print(row); print(row2)
+    print(f"{BBLACK}  {'─'*76}{R}")
+    print()
+
+# ═══════════════════════════ DATA STRUCTURES ════════════════════════════════
+@dataclass
+class ColumnConditions:
+    feed_rate: Optional[float]           = None
+    design_feed_rate: Optional[float]    = None
+    reflux_ratio: Optional[float]        = None
+    reboiler_duty: Optional[float]       = None
+    top_temp: Optional[float]            = None
+    bottom_temp: Optional[float]         = None
+    feed_temp: Optional[float]           = None
+    top_pressure: Optional[float]        = None
+    bottom_pressure: Optional[float]     = None
+    dp_tray: Optional[float]             = None
+    design_dp_per_tray: Optional[float]  = None
+    num_trays: Optional[int]             = None
+    distillate_flow: Optional[float]     = None
+    bottoms_flow: Optional[float]        = None
+    foaming_observed: Optional[bool]     = None
+    vibration_observed: Optional[bool]   = None
+    product_off_spec: Optional[bool]     = None
+    sudden_pressure_spike: Optional[bool]= None
+
+@dataclass
+class DiagnosisResult:
+    problem: str
+    severity: str
+    confidence: str
+    score: int
+    description: str
+    symptoms_matched: list
+    root_causes: list
+    corrective_actions: list
+    preventive_measures: list
+    ai_commentary: str = ""
+
+# ═══════════════════════════ LANGGRAPH STATE ════════════════════════════════
+class DiagnosisState(TypedDict):
+    """State for the diagnosis workflow"""
+    conditions: dict
+    symptoms: list
+    rule_based_results: list
+    enriched_results: list
+    ai_commentary: dict
+    final_diagnosis: list
+    processing_stage: str
+    errors: Annotated[Sequence[str], add]
+
+# ═══════════════════════════ FAULT KNOWLEDGE BASE ═══════════════════════════
+PROBLEMS = {
+    "FLOODING": {
+        "icon": "🌊", "color": BRED,
+        "description": "Excessive vapor velocity prevents liquid downflow; liquid accumulates above trays",
+        "root_causes": [
+            "Excessive vapor rate / over-reboiling",
+            "Excessive reflux (downcomer flooding)",
+            "Feed rate beyond design capacity",
+            "Foaming increasing effective liquid holdup",
+            "Plugged or damaged downcomers",
+            "Fouled internals restricting vapor path",
+            "Subcooled reflux causing liquid surge",
+        ],
+        "corrective_actions": [
+            "🔻  Reduce reboiler duty by 10–15% IMMEDIATELY",
+            "🔻  Cut feed rate to 85–90% of current value",
+            "🔻  Reduce reflux ratio gradually (watch overhead quality)",
+            "📊  Monitor column ΔP — expect drop within 20 min of action",
+            "🔼  Slightly increase top pressure to reduce vapor velocity",
+            "🔍  Inspect downcomers for blockage or structural damage",
+            "💧  Verify reflux temperature (avoid highly subcooled reflux)",
+            "🚨  If ΔP keeps rising → initiate controlled emergency shutdown",
+        ],
+        "preventive_measures": [
+            "Install ΔP alarms at 120% and 150% of design ΔP",
+            "Operate at ≤ 80% of flood velocity as continuous safety margin",
+            "Anti-foam injection system for susceptible services",
+            "Regular gamma scanning to detect tray damage / fouling",
+            "Feed pre-heater control to prevent subcooled feed surges",
+        ],
+    },
+    "WEEPING": {
+        "icon": "💧", "color": BBLUE,
+        "description": "Liquid bypasses trays through perforations due to insufficient vapor velocity",
+        "root_causes": [
+            "Feed rate far below design — turndown exceeded",
+            "Reboiler duty too low — insufficient vapor generation",
+            "Reflux ratio too high relative to vapor rate",
+            "Worn-out or oversized tray perforations / valve trays",
+            "Column pressure too high — dense vapor, low velocity",
+            "Unplanned feed loss",
+            "Reboiler control loop failure causing under-boiling",
+        ],
+        "corrective_actions": [
+            "🔼  Increase reboiler duty 10–15% to generate more vapor",
+            "🔼  Raise feed rate if below minimum turndown limit",
+            "🔻  Reduce reflux ratio to restore vapor-liquid balance",
+            "🔻  Lower top pressure to increase vapor velocity",
+            "📊  Target ΔP/tray ≥ 0.5 kPa/tray for sieve trays",
+            "🔧  Inspect tray perforations for wear at next shutdown",
+            "⚙️   Verify reboiler control valve — check for stuck/undersized",
+        ],
+        "preventive_measures": [
+            "Define and enforce minimum turndown ratio (40–50% of design)",
+            "Install low-ΔP alarm at 50% of design value",
+            "Use valve trays for better turndown vs. sieve trays",
+            "Hydraulic simulation to verify weeping limits at minimum load",
+        ],
+    },
+    "FOAMING": {
+        "icon": "🫧", "color": BMAG,
+        "description": "Stable foam formation reduces tray spacing effectiveness and promotes entrainment",
+        "root_causes": [
+            "Surfactants / contaminants in feed (oils, amines, inhibitors)",
+            "High liquid viscosity or surface-active components",
+            "Corrosion products or particulate fines in feed",
+            "High pressure operation — dense vapor-liquid interface",
+            "Sudden temperature changes destabilizing VLE",
+            "Heat exchanger leaks contaminating feed",
+        ],
+        "corrective_actions": [
+            "💉  Inject silicone-based anti-foam at column top and feed tray",
+            "🔻  Reduce feed rate by 15–20% to reduce foam generation",
+            "🔍  Trace and eliminate contamination source upstream",
+            "🔻  Slightly reduce reboiler duty to lower turbulence",
+            "🔬  Send feed sample to lab — identify foaming agent",
+            "📋  Check heat exchanger tube integrity for cross-contamination",
+            "⚗️   Plan tray spacing increase in next revamp",
+        ],
+        "preventive_measures": [
+            "Continuous anti-foam dosing system with automated pump",
+            "Online feed quality monitoring (pH, conductivity probes)",
+            "Regular heat exchanger tube leak pressure tests",
+            "Install demister / mesh pads at vapor outlets",
+        ],
+    },
+    "ENTRAINMENT": {
+        "icon": "💨", "color": BCYAN,
+        "description": "Liquid droplets carried upward by vapor reduce separation efficiency",
+        "root_causes": [
+            "Vapor velocity > 80% of flooding velocity",
+            "Insufficient tray spacing for disengagement",
+            "Damaged or absent demister/mesh pads",
+            "High surface tension fluids",
+            "High pressure — dense vapor phase",
+        ],
+        "corrective_actions": [
+            "🔻  Reduce reboiler duty 8–12% to lower vapor velocity",
+            "🔻  Cut feed rate to bring vapor load below 75% flood point",
+            "🔧  Clean or replace demister pads / chevron separators",
+            "📊  Calculate Souders-Brown coefficient vs. design limit",
+            "🔼  Temporarily increase reflux to wash back entrained liquid",
+        ],
+        "preventive_measures": [
+            "Design for max 75–80% of flooding velocity",
+            "Install high-efficiency demister pads at column top",
+            "Regular internal inspection and cleaning during turnaround",
+        ],
+    },
+    "FOULING": {
+        "icon": "🔩", "color": BGREEN,
+        "description": "Gradual deposit buildup restricts flow paths and progressively reduces efficiency",
+        "root_causes": [
+            "Polymerization of reactive components at elevated temperature",
+            "Corrosion products and mineral scale",
+            "Salt precipitation from aqueous feeds",
+            "Coke formation in high-temperature hydrocarbon columns",
+            "Biological fouling in ambient/low-temperature systems",
+            "Catalyst fines or iron oxide from upstream units",
+        ],
+        "corrective_actions": [
+            "🔻  Reduce feed rate to compensate for reduced capacity",
+            "🧪  Inject compatible chemical cleaning solvent",
+            "📋  Schedule online water washing for soluble deposits",
+            "⏰  Advance planned shutdown for mechanical cleaning",
+            "🔍  Monitor temperature profile for hot spots (coke indicator)",
+            "⚙️   Increase anti-foulant injection rate",
+        ],
+        "preventive_measures": [
+            "Continuous anti-foulant injection in feed line",
+            "Online feed filtration to remove particulate fines",
+            "Weekly temperature profile surveys",
+            "Limit maximum reboiler skin temperature",
+            "Periodic online water-washing cycles",
+        ],
+    },
+    "REBOILER_ISSUES": {
+        "icon": "🔥", "color": BYELLOW,
+        "description": "Reboiler malfunction causing insufficient or erratic vapor generation",
+        "root_causes": [
+            "Fouled reboiler tubes — reduced heat transfer coefficient",
+            "Steam supply pressure drop or control valve failure",
+            "Tube leaks causing cross-contamination",
+            "Non-condensables trapped in steam side",
+            "Thermosiphon circulation failure (high backpressure)",
+            "Incorrect reboiler liquid level (flooded or starved)",
+        ],
+        "corrective_actions": [
+            "🔧  Switch to standby reboiler if available",
+            "📊  Verify steam pressure and flow — check PCV position",
+            "🌡️   Check reboiler ΔT — should be ≥ 10°C inlet vs. outlet",
+            "🔼  Increase steam supply pressure if below design",
+            "💨  Vent non-condensables from steam side",
+            "📋  Schedule tube bundle inspection and mechanical cleaning",
+            "🧪  Test condensate for process fluid — check for tube leaks",
+        ],
+        "preventive_measures": [
+            "Install standby reboiler for critical columns",
+            "Monthly U-value calculation to track fouling trend",
+            "Regular steam trap surveys",
+            "Thermosiphon circulation monitoring via flow transmitters",
+        ],
+    },
+    "PRESSURE_CONTROL": {
+        "icon": "⊞", "color": BBLUE,
+        "description": "Column pressure deviations shift VLE and degrade separation performance",
+        "root_causes": [
+            "Condenser cooling water fouling or reduced flow",
+            "Non-condensable gas accumulation in overhead",
+            "Pressure control valve (PCV) failure or stiction",
+            "Ambient temperature swings affecting air coolers",
+            "Feed composition changes shifting vapor pressure",
+            "Upstream pressure disturbances propagating to column",
+        ],
+        "corrective_actions": [
+            "🔼  Increase cooling water flow to condenser",
+            "🔩  Vent non-condensables from overhead accumulator",
+            "🔧  Check and repair / replace PCV",
+            "📊  Review temperature profile — shift indicates composition upset",
+            "⚖️   Adjust reflux rate to stabilize overhead pressure",
+            "🌡️   Verify condenser inlet/outlet temperatures",
+        ],
+        "preventive_measures": [
+            "Regular condenser tube cleaning schedule",
+            "Automatic non-condensable bleed valve on accumulator",
+            "PCV position monitoring with deviation alarm",
+            "Feed composition analyser with feed-forward control loop",
+        ],
+    },
+}
+
+# ═══════════════════════════ RULE-BASED DIAGNOSIS ══════════════════════════
+class RuleBasedDiagnostics:
+    def diagnose(self, cond: ColumnConditions, symptoms_text: list) -> list:
+        results = []
+        sym_str = " ".join(symptoms_text).lower()
+
+        rules = {
+            "FLOODING": self._score_flooding,
+            "WEEPING":  self._score_weeping,
+            "FOAMING":  self._score_foaming,
+            "ENTRAINMENT": self._score_entrainment,
+            "FOULING":  self._score_fouling,
+            "REBOILER_ISSUES": self._score_reboiler,
+            "PRESSURE_CONTROL": self._score_pressure,
+        }
+
+        for name, fn in rules.items():
+            score, matched = fn(cond, sym_str)
+            if score >= 20:
+                if score >= 60: sev, conf = "CRITICAL", "HIGH"
+                elif score >= 35: sev, conf = "WARNING", "MEDIUM"
+                else: sev, conf = "INFO", "LOW"
+                p = PROBLEMS[name]
+                results.append(DiagnosisResult(
+                    problem=name, severity=sev, confidence=conf, score=score,
+                    description=p["description"], symptoms_matched=matched,
+                    root_causes=p["root_causes"],
+                    corrective_actions=p["corrective_actions"],
+                    preventive_measures=p["preventive_measures"],
+                ))
+
+        return sorted(results, key=lambda x: x.score, reverse=True)
+
+    def _score_flooding(self, c, s):
+        sc, m = 0, []
+        if c.dp_tray and c.design_dp_per_tray:
+            r = c.dp_tray / c.design_dp_per_tray
+            if r > 1.5:   sc += 40; m.append(f"ΔP/tray = {c.dp_tray:.2f} kPa  ({r:.1f}× design — CRITICAL)")
+            elif r > 1.2: sc += 20; m.append(f"ΔP/tray elevated = {c.dp_tray:.2f} kPa ({r:.1f}× design)")
+        if c.sudden_pressure_spike: sc += 25; m.append("Sudden pressure spike confirmed")
+        if c.product_off_spec:      sc += 10; m.append("Product quality off-spec")
+        if c.vibration_observed:    sc += 10; m.append("Abnormal vibrations / knocking")
+        if c.feed_rate and c.design_feed_rate and c.feed_rate > 1.1 * c.design_feed_rate:
+            sc += 20; m.append(f"Feed {c.feed_rate:.0f} kg/h > 110% of design ({c.design_feed_rate:.0f})")
+        if any(k in s for k in ["flood","liquid level drop","bottom level","pressure spike","knock"]):
+            sc += 30; m.append("Keyword match — flooding symptoms in description")
+        return sc, m
+
+    def _score_weeping(self, c, s):
+        sc, m = 0, []
+        if c.dp_tray and c.design_dp_per_tray:
+            r = c.dp_tray / c.design_dp_per_tray
+            if r < 0.4:   sc += 40; m.append(f"ΔP/tray = {c.dp_tray:.2f} kPa — very low ({r:.1f}× design)")
+            elif r < 0.6: sc += 20; m.append(f"ΔP/tray low = {c.dp_tray:.2f} kPa ({r:.1f}× design)")
+        if c.feed_rate and c.design_feed_rate and c.feed_rate < 0.5 * c.design_feed_rate:
+            sc += 30; m.append(f"Feed {c.feed_rate:.0f} < 50% design — turndown risk")
+        if any(k in s for k in ["weep","low pressure","poor separation","both products","low throughput","turndown"]):
+            sc += 35; m.append("Keyword match — weeping symptoms in description")
+        return sc, m
+
+    def _score_foaming(self, c, s):
+        sc, m = 0, []
+        if c.foaming_observed: sc += 50; m.append("Foaming directly observed/confirmed")
+        if any(k in s for k in ["foam","erratic","fluctuat","surging","unstable","oscillat","froth"]):
+            sc += 35; m.append("Keyword match — foaming/erratic behavior described")
+        return sc, m
+
+    def _score_entrainment(self, c, s):
+        sc, m = 0, []
+        if c.dp_tray and c.design_dp_per_tray:
+            r = c.dp_tray / c.design_dp_per_tray
+            if 1.1 < r < 1.5: sc += 25; m.append(f"ΔP/tray moderately high = {c.dp_tray:.2f} kPa")
+        if any(k in s for k in ["entrain","carryover","distillate contam","heavy in overhead","top quality"]):
+            sc += 40; m.append("Keyword match — entrainment described")
+        if c.product_off_spec: sc += 10; m.append("Product off-spec (likely heavy in overhead)")
+        return sc, m
+
+    def _score_fouling(self, c, s):
+        sc, m = 0, []
+        if any(k in s for k in ["foul","gradual","scale","deposit","plugg","coke","build","reducing capacity","drift"]):
+            sc += 45; m.append("Keyword match — gradual fouling symptoms described")
+        if c.reboiler_duty and c.reboiler_duty > 110:
+            sc += 15; m.append(f"Reboiler duty elevated = {c.reboiler_duty:.1f}%")
+        return sc, m
+
+    def _score_reboiler(self, c, s):
+        sc, m = 0, []
+        if c.bottom_temp and c.feed_temp and c.bottom_temp < c.feed_temp:
+            sc += 30; m.append(f"Bottom temp ({c.bottom_temp}°C) < Feed temp ({c.feed_temp}°C) — abnormal")
+        if any(k in s for k in ["reboiler","steam","heat duty","bottom temp low","no vapor","tube leak","contamination"]):
+            sc += 40; m.append("Keyword match — reboiler issue described")
+        return sc, m
+
+    def _score_pressure(self, c, s):
+        sc, m = 0, []
+        if any(k in s for k in ["pressure control","condenser","non-condensable","vent","pressure high","pressure low","pcv","cooling water"]):
+            sc += 40; m.append("Keyword match — pressure control symptoms described")
+        if c.top_pressure and c.bottom_pressure and c.top_pressure > c.bottom_pressure:
+            sc += 30; m.append("Top pressure > Bottom pressure — pressure inversion detected")
+        return sc, m
+
+# ═══════════════════════════ GEMINI AI INTEGRATION ═════════════════════════
+def gemini_enhance(cond_dict: dict, results: list, symptoms: list) -> dict:
+    """
+    Call Gemini to produce an AI-enhanced narrative for each diagnosed fault.
+    Returns a dict keyed by problem name with the AI text, or an empty dict on failure.
+    """
+    if not GEMINI_ENABLED or not GOOGLE_API_KEY:
+        return {}
+
+    faults_summary = [
+        {"fault": r.problem, "severity": r.severity,
+         "score": r.score, "triggers": r.symptoms_matched}
+        for r in results
+    ]
+
+    prompt = (
+        "You are an expert chemical-process engineer specialising in distillation column "
+        "troubleshooting. Given the operating data and fault-diagnosis results below, "
+        "provide a concise but expert AI commentary for EACH fault in 3–5 sentences. "
+        "Focus on the most likely root cause given the specific numbers, and the single "
+        "most impactful corrective step an operator should take first. "
+        "Respond as a JSON object where each key is the fault name (e.g. FLOODING) and "
+        "the value is your commentary string. No markdown, no preamble.\n\n"
+        f"OPERATING CONDITIONS:\n{json.dumps(cond_dict, indent=2)}\n\n"
+        f"SYMPTOMS REPORTED:\n{json.dumps(symptoms, indent=2)}\n\n"
+        f"DETECTED FAULTS:\n{json.dumps(faults_summary, indent=2)}"
+    )
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1024},
+    }
+
+    try:
+        print(f"      {DIM}→ Sending request...{R}", end="", flush=True)
+        resp = requests.post(GEMINI_API_URL, json=payload, timeout=(GEMINI_TIMEOUT, GEMINI_TIMEOUT))
+        print(f" {BGREEN}✓{R}")
+
+        if resp.status_code != 200:
+            print(f"      {BYELLOW}⚠ API status {resp.status_code}{R}")
+            return {}
+
+        print(f"      {DIM}→ Parsing response...{R}", end="", flush=True)
+        raw = resp.json()
+        text = raw["candidates"][0]["content"]["parts"][0]["text"].strip()
+        # Strip possible markdown fences
+        text = text.replace("```json", "").replace("```", "").strip()
+        result = json.loads(text)
+        print(f" {BGREEN}✓{R}")
+        return result
+    except requests.exceptions.Timeout:
+        print(f" {BYELLOW}⚠ Timeout{R}")
+        return {}
+    except requests.exceptions.ConnectionError:
+        print(f" {BYELLOW}⚠ Connection failed{R}")
+        return {}
+    except requests.exceptions.RequestException as e:
+        print(f" {BYELLOW}⚠ Network error{R}")
+        return {}
+    except (KeyError, json.JSONDecodeError) as e:
+        print(f" {BYELLOW}⚠ Invalid response{R}")
+        return {}
+    except Exception as e:
+        print(f" {BYELLOW}⚠ {str(e)[:30]}{R}")
+        return {}
+
+# ═══════════════════════════ LANGGRAPH WORKFLOW ═════════════════════════════
+def rule_based_analysis(state: DiagnosisState) -> DiagnosisState:
+    """Node 1: Apply rule-based diagnosis"""
+    print(f"  {DIM}[Node 1] Rule-based analysis...{R}", end="", flush=True)
+    cond_obj = ColumnConditions(**state["conditions"])
+    engine = RuleBasedDiagnostics()
+    results = engine.diagnose(cond_obj, state["symptoms"])
+
+    state["rule_based_results"] = [asdict(r) for r in results]
+    state["processing_stage"] = "rule_analysis_complete"
+    print(f" {BGREEN}✓{R}")
+    return state
+
+def ai_enhancement(state: DiagnosisState) -> DiagnosisState:
+    """Node 2: Enhance with Gemini AI"""
+    print(f"  {DIM}[Node 2] AI enhancement...{R}", end="", flush=True)
+
+    if not state["rule_based_results"]:
+        state["processing_stage"] = "no_faults_detected"
+        state["final_diagnosis"] = []
+        print(f" {BYELLOW}(no faults detected){R}")
+        return state
+
+    # Convert back to DiagnosisResult objects
+    results = [DiagnosisResult(**r) for r in state["rule_based_results"]]
+
+    # Get AI commentary with error handling
+    ai_commentary = {}
+    if GEMINI_ENABLED and results:
+        print()
+        print(f"    {BMAG}🤖 Calling Gemini {GEMINI_MODEL}...{R}")
+        try:
+            ai_commentary = gemini_enhance(state["conditions"], results, state["symptoms"])
+            if ai_commentary:
+                print(f"    {BGREEN}✓ AI commentary received for {len(ai_commentary)} fault(s){R}")
+            else:
+                print(f"    {BYELLOW}⚠ No AI commentary received (continuing with rule-based){R}")
+        except Exception as e:
+            print(f"    {BYELLOW}⚠ AI error: {str(e)[:50]} (continuing with rule-based){R}")
+            ai_commentary = {}
+    else:
+        print(f" {BYELLOW}(AI disabled){R}")
+
+    state["ai_commentary"] = ai_commentary
+
+    # Enrich results with AI commentary
+    enriched = []
+    for r in results:
+        r.ai_commentary = ai_commentary.get(r.problem, "")
+        enriched.append(asdict(r))
+
+    state["enriched_results"] = enriched
+    state["processing_stage"] = "ai_enhancement_complete"
+    return state
+
+def finalize_diagnosis(state: DiagnosisState) -> DiagnosisState:
+    """Node 3: Finalize and prepare output"""
+    print(f"  {DIM}[Node 3] Finalizing...{R}", end="", flush=True)
+    state["final_diagnosis"] = state["enriched_results"]
+    state["processing_stage"] = "complete"
+    print(f" {BGREEN}✓{R}")
+    return state
+
+def build_diagnosis_graph():
+    """Build the LangGraph workflow"""
+    workflow = StateGraph(DiagnosisState)
+
+    # Add nodes
+    workflow.add_node("rule_analysis", rule_based_analysis)
+    workflow.add_node("ai_enhancement", ai_enhancement)
+    workflow.add_node("finalize", finalize_diagnosis)
+
+    # Add edges
+    workflow.set_entry_point("rule_analysis")
+    workflow.add_edge("rule_analysis", "ai_enhancement")
+    workflow.add_edge("ai_enhancement", "finalize")
+    workflow.add_edge("finalize", END)
+
+    # Compile
+    app = workflow.compile()
+    return app
+
+# ═══════════════════════════ DEFAULT VALUES FOR DEMO ═══════════════════════
+DEFAULT_VALUES = {
+    "feed_rate": 5800,
+    "design_feed_rate": 5000,
+    "reflux_ratio": 3.2,
+    "reboiler_duty": 118,
+    "top_temp": 78.5,
+    "bottom_temp": 142.0,
+    "feed_temp": 95.0,
+    "top_pressure": 110.0,
+    "bottom_pressure": 128.0,
+    "dp_tray": 1.85,
+    "design_dp_per_tray": 0.85,
+    "num_trays": 35,
+    "distillate_flow": 320,
+    "bottoms_flow": 1100,
+    "foaming_observed": True,
+    "vibration_observed": True,
+    "product_off_spec": True,
+    "sudden_pressure_spike": True,
+}
+
+DEFAULT_SYMPTOMS = [
+    "sudden pressure spike in last 2 hours",
+    "bottom liquid level dropping unexpectedly",
+    "knocking sounds from lower tray section",
+    "distillate product going off-spec",
+    "foamy liquid visible in reflux drum sight glass",
+]
+
+# ═══════════════════════════ IMPROVED INPUT MODULE ═════════════════════════
+def display_input_form(use_defaults=False):
+    """Display all input fields at once in a structured form"""
+    print()
+
+    if IS_COLAB:
+        # Simplified form for Colab
+        print("=" * 80)
+        print("  DATA INPUT FORM".center(80))
+        print("=" * 80)
+        print()
+
+        if use_defaults:
+            print("  >> USING DEFAULT DEMO VALUES")
+            print("  >> Press Enter to accept defaults, or type new values")
+            print()
+
+        # Display fields in simple format
+        print("OPERATING CONDITIONS:")
+        d1 = f" [default: {DEFAULT_VALUES['feed_rate']}]" if use_defaults else ""
+        d2 = f" [default: {DEFAULT_VALUES['design_feed_rate']}]" if use_defaults else ""
+        d3 = f" [default: {DEFAULT_VALUES['reflux_ratio']}]" if use_defaults else ""
+        d4 = f" [default: {DEFAULT_VALUES['reboiler_duty']}]" if use_defaults else ""
+        print(f"  [1]  Feed Rate (kg/h){d1}")
+        print(f"  [2]  Design Feed Rate (kg/h){d2}")
+        print(f"  [3]  Reflux Ratio (L/D){d3}")
+        print(f"  [4]  Reboiler Duty (% of design){d4}")
+        print()
+
+        print("TEMPERATURE PROFILE:")
+        d5 = f" [default: {DEFAULT_VALUES['top_temp']}]" if use_defaults else ""
+        d6 = f" [default: {DEFAULT_VALUES['bottom_temp']}]" if use_defaults else ""
+        d7 = f" [default: {DEFAULT_VALUES['feed_temp']}]" if use_defaults else ""
+        print(f"  [5]  Top Temperature (°C){d5}")
+        print(f"  [6]  Bottom Temperature (°C){d6}")
+        print(f"  [7]  Feed Temperature (°C){d7}")
+        print()
+
+        print("PRESSURE DATA:")
+        d8 = f" [default: {DEFAULT_VALUES['top_pressure']}]" if use_defaults else ""
+        d9 = f" [default: {DEFAULT_VALUES['bottom_pressure']}]" if use_defaults else ""
+        d10 = f" [default: {DEFAULT_VALUES['dp_tray']}]" if use_defaults else ""
+        d11 = f" [default: {DEFAULT_VALUES['design_dp_per_tray']}]" if use_defaults else ""
+        d12 = f" [default: {DEFAULT_VALUES['num_trays']}]" if use_defaults else ""
+        print(f"  [8]  Top Pressure (kPa){d8}")
+        print(f"  [9]  Bottom Pressure (kPa){d9}")
+        print(f"  [10] ΔP per Tray (kPa/tray){d10}")
+        print(f"  [11] Design ΔP per Tray (kPa/tray, normal ~0.8){d11}")
+        print(f"  [12] Number of Trays{d12}")
+        print()
+
+        print("FLOW RATES:")
+        d13 = f" [default: {DEFAULT_VALUES['distillate_flow']}]" if use_defaults else ""
+        d14 = f" [default: {DEFAULT_VALUES['bottoms_flow']}]" if use_defaults else ""
+        print(f"  [13] Distillate Flow (kg/h){d13}")
+        print(f"  [14] Bottoms Flow (kg/h){d14}")
+        print()
+
+        print("FIELD OBSERVATIONS (y/n):")
+        d15 = f" [default: {'y' if DEFAULT_VALUES['foaming_observed'] else 'n'}]" if use_defaults else ""
+        d16 = f" [default: {'y' if DEFAULT_VALUES['vibration_observed'] else 'n'}]" if use_defaults else ""
+        d17 = f" [default: {'y' if DEFAULT_VALUES['product_off_spec'] else 'n'}]" if use_defaults else ""
+        d18 = f" [default: {'y' if DEFAULT_VALUES['sudden_pressure_spike'] else 'n'}]" if use_defaults else ""
+        print(f"  [15] Foaming observed?{d15}")
+        print(f"  [16] Abnormal vibrations?{d16}")
+        print(f"  [17] Product off-spec?{d17}")
+        print(f"  [18] Sudden pressure spike?{d18}")
+        print()
+
+        print("SYMPTOMS DESCRIPTION (free text):")
+        if use_defaults:
+            print(f"  [19] Describe symptoms (comma-separated)")
+            print(f"       [default: pressure spike, level drop, knocking sounds, off-spec, foamy]")
+        else:
+            print(f"  [19] Describe symptoms (comma-separated)")
+        print()
+
+        print("-" * 80)
+        if use_defaults:
+            print("  Note: Press Enter to use default value. Type value to override.")
+        else:
+            print("  Note: Press Enter to skip any field. For yes/no, use 'y' or 'n'.")
+        print()
+        return
+
+    # Original colorful form for terminal
+    hline("═", BCYAN)
+    print(f"{BG_BBLACK}{BCYAN+BOLD}{'  DATA INPUT FORM  ':^78}{R}")
+    hline("═", BCYAN)
+    print()
+
+    if use_defaults:
+        print(f"  {BG_BGREEN}{BLACK+BOLD}  ✓  USING DEFAULT DEMO VALUES  {R}")
+        print(f"  {BGREEN}Press Enter to accept defaults, or type new values{R}")
+        print()
+
+    # Display all fields with numbering
+    print(f"{BOLD}{BYELLOW}▶ OPERATING CONDITIONS{R}")
+    d1 = f" {DIM}[default: {DEFAULT_VALUES['feed_rate']}]{R}" if use_defaults else ""
+    d2 = f" {DIM}[default: {DEFAULT_VALUES['design_feed_rate']}]{R}" if use_defaults else ""
+    d3 = f" {DIM}[default: {DEFAULT_VALUES['reflux_ratio']}]{R}" if use_defaults else ""
+    d4 = f" {DIM}[default: {DEFAULT_VALUES['reboiler_duty']}]{R}" if use_defaults else ""
+    print(f"  {BBLACK}[1]{R}  {BCYAN}Feed Rate{R} {BBLACK}(kg/h){R}{d1}")
+    print(f"  {BBLACK}[2]{R}  {BCYAN}Design Feed Rate{R} {BBLACK}(kg/h){R}{d2}")
+    print(f"  {BBLACK}[3]{R}  {BCYAN}Reflux Ratio (L/D){R}{d3}")
+    print(f"  {BBLACK}[4]{R}  {BCYAN}Reboiler Duty{R} {BBLACK}(% of design){R}{d4}")
+    print()
+
+    print(f"{BOLD}{BYELLOW}▶ TEMPERATURE PROFILE{R}")
+    d5 = f" {DIM}[default: {DEFAULT_VALUES['top_temp']}]{R}" if use_defaults else ""
+    d6 = f" {DIM}[default: {DEFAULT_VALUES['bottom_temp']}]{R}" if use_defaults else ""
+    d7 = f" {DIM}[default: {DEFAULT_VALUES['feed_temp']}]{R}" if use_defaults else ""
+    print(f"  {BBLACK}[5]{R}  {BCYAN}Top Temperature{R} {BBLACK}(°C){R}{d5}")
+    print(f"  {BBLACK}[6]{R}  {BCYAN}Bottom Temperature{R} {BBLACK}(°C){R}{d6}")
+    print(f"  {BBLACK}[7]{R}  {BCYAN}Feed Temperature{R} {BBLACK}(°C){R}{d7}")
+    print()
+
+    print(f"{BOLD}{BYELLOW}▶ PRESSURE DATA{R}")
+    d8 = f" {DIM}[default: {DEFAULT_VALUES['top_pressure']}]{R}" if use_defaults else ""
+    d9 = f" {DIM}[default: {DEFAULT_VALUES['bottom_pressure']}]{R}" if use_defaults else ""
+    d10 = f" {DIM}[default: {DEFAULT_VALUES['dp_tray']}]{R}" if use_defaults else ""
+    d11 = f" {DIM}[default: {DEFAULT_VALUES['design_dp_per_tray']}]{R}" if use_defaults else ""
+    d12 = f" {DIM}[default: {DEFAULT_VALUES['num_trays']}]{R}" if use_defaults else ""
+    print(f"  {BBLACK}[8]{R}  {BCYAN}Top Pressure{R} {BBLACK}(kPa){R}{d8}")
+    print(f"  {BBLACK}[9]{R}  {BCYAN}Bottom Pressure{R} {BBLACK}(kPa){R}{d9}")
+    print(f"  {BBLACK}[10]{R} {BCYAN}ΔP per Tray{R} {BBLACK}(kPa/tray){R}{d10}")
+    print(f"  {BBLACK}[11]{R} {BCYAN}Design ΔP per Tray{R} {BBLACK}(kPa/tray, normal ~0.8){R}{d11}")
+    print(f"  {BBLACK}[12]{R} {BCYAN}Number of Trays{R}{d12}")
+    print()
+
+    print(f"{BOLD}{BYELLOW}▶ FLOW RATES{R}")
+    d13 = f" {DIM}[default: {DEFAULT_VALUES['distillate_flow']}]{R}" if use_defaults else ""
+    d14 = f" {DIM}[default: {DEFAULT_VALUES['bottoms_flow']}]{R}" if use_defaults else ""
+    print(f"  {BBLACK}[13]{R} {BCYAN}Distillate Flow{R} {BBLACK}(kg/h){R}{d13}")
+    print(f"  {BBLACK}[14]{R} {BCYAN}Bottoms Flow{R} {BBLACK}(kg/h){R}{d14}")
+    print()
+
+    print(f"{BOLD}{BYELLOW}▶ FIELD OBSERVATIONS{R} {BBLACK}(y/n){R}")
+    d15 = f" {DIM}[default: {'y' if DEFAULT_VALUES['foaming_observed'] else 'n'}]{R}" if use_defaults else ""
+    d16 = f" {DIM}[default: {'y' if DEFAULT_VALUES['vibration_observed'] else 'n'}]{R}" if use_defaults else ""
+    d17 = f" {DIM}[default: {'y' if DEFAULT_VALUES['product_off_spec'] else 'n'}]{R}" if use_defaults else ""
+    d18 = f" {DIM}[default: {'y' if DEFAULT_VALUES['sudden_pressure_spike'] else 'n'}]{R}" if use_defaults else ""
+    print(f"  {BBLACK}[15]{R} {BCYAN}Foaming observed?{R}{d15}")
+    print(f"  {BBLACK}[16]{R} {BCYAN}Abnormal vibrations?{R}{d16}")
+    print(f"  {BBLACK}[17]{R} {BCYAN}Product off-spec?{R}{d17}")
+    print(f"  {BBLACK}[18]{R} {BCYAN}Sudden pressure spike?{R}{d18}")
+    print()
+
+    print(f"{BOLD}{BYELLOW}▶ SYMPTOMS DESCRIPTION{R} {BBLACK}(free text){R}")
+    if use_defaults:
+        print(f"  {BBLACK}[19]{R} {BCYAN}Describe symptoms (comma-separated){R}")
+        print(f"      {DIM}[default: pressure spike, level drop, knocking sounds, off-spec, foamy]{R}")
+    else:
+        print(f"  {BBLACK}[19]{R} {BCYAN}Describe symptoms (comma-separated){R}")
+    print()
+
+    thin_line(BBLACK)
+    if use_defaults:
+        print(f"  {DIM}Note: Press Enter to use default value. Type value to override.{R}")
+    else:
+        print(f"  {DIM}Note: Press Enter to skip any field. For yes/no, use 'y' or 'n'.{R}")
+    print()
+
+def parse_value(val_str: str, field_type: str, default_val=None):
+    """Parse input value based on field type"""
+    val_str = val_str.strip()
+    if val_str == "":
+        return default_val  # Return default if provided, else None
+
+    try:
+        if field_type == "float":
+            return float(val_str)
+        elif field_type == "int":
+            return int(val_str)
+        elif field_type == "bool":
+            v = val_str.lower()
+            if v in ["y", "yes", "true", "1"]:
+                return True
+            elif v in ["n", "no", "false", "0"]:
+                return False
+            return default_val if default_val is not None else None
+        else:
+            return val_str
+    except:
+        return default_val if default_val is not None else None
+
+def collect_inputs_batch(use_defaults=False) -> tuple:
+    """Collect all inputs in batch mode with improved UI"""
+    display_input_form(use_defaults)
+
+    # Define field mappings
+    fields = [
+        ("feed_rate", "float", "Feed Rate (kg/h)"),
+        ("design_feed_rate", "float", "Design Feed Rate (kg/h)"),
+        ("reflux_ratio", "float", "Reflux Ratio (L/D)"),
+        ("reboiler_duty", "float", "Reboiler Duty (% of design)"),
+        ("top_temp", "float", "Top Temperature (°C)"),
+        ("bottom_temp", "float", "Bottom Temperature (°C)"),
+        ("feed_temp", "float", "Feed Temperature (°C)"),
+        ("top_pressure", "float", "Top Pressure (kPa)"),
+        ("bottom_pressure", "float", "Bottom Pressure (kPa)"),
+        ("dp_tray", "float", "ΔP per Tray (kPa/tray)"),
+        ("design_dp_per_tray", "float", "Design ΔP per Tray (kPa/tray)"),
+        ("num_trays", "int", "Number of Trays"),
+        ("distillate_flow", "float", "Distillate Flow (kg/h)"),
+        ("bottoms_flow", "float", "Bottoms Flow (kg/h)"),
+        ("foaming_observed", "bool", "Foaming observed (y/n)"),
+        ("vibration_observed", "bool", "Vibrations (y/n)"),
+        ("product_off_spec", "bool", "Product off-spec (y/n)"),
+        ("sudden_pressure_spike", "bool", "Pressure spike (y/n)"),
+    ]
+
+    # If using defaults, ask if user wants to auto-fill all
+    auto_fill = False
+    if use_defaults:
+        if IS_COLAB:
+            # Simple prompt for Colab
+            print("Quick Input Options:\n")
+            print("  [A]  Auto-fill ALL defaults (recommended - no input needed)")
+            print("  [M]  Manual entry (go through each field)\n")
+            choice = input("  Select (A/M) [default: A]: ").strip().upper()
+        else:
+            print(f"{BOLD}{BWHITE}Quick Input Options:{R}\n")
+            print(f"  {BGREEN}[A]{R}  Auto-fill ALL defaults {DIM}(recommended - no input needed){R}")
+            print(f"  {BCYAN}[M]{R}  Manual entry {DIM}(go through each field){R}\n")
+            choice = input(f"  {BCYAN}❯{R}  {BWHITE}Select (A/M) [default: A]: {R}").strip().upper()
+
+        # Default to 'A' if user presses Enter
+        if choice == '' or choice == 'A':
+            auto_fill = True
+            if IS_COLAB:
+                print("\n  >> Auto-filling all fields with defaults...\n")
+            else:
+                print(f"\n  {BGREEN}✓{R}  {BWHITE}Auto-filling all fields with defaults...{R}\n")
+            pause(0.8)
+        else:
+            if IS_COLAB:
+                print("\nEnter values below (press Enter to accept default):\n")
+            else:
+                print(f"\n{BOLD}{BWHITE}Enter values below (press Enter to accept default):{R}\n")
+    else:
+        if IS_COLAB:
+            print("Enter values below:\n")
+        else:
+            print(f"{BOLD}{BWHITE}Enter values below:{R}\n")
+
+    cond = ColumnConditions()
+
+    if auto_fill:
+        # Auto-fill all fields with defaults
+        for field_name, field_type, display_name in fields:
+            default_val = DEFAULT_VALUES.get(field_name)
+            setattr(cond, field_name, default_val)
+            # Show what was filled
+            if field_type == "bool":
+                val_str = "Yes" if default_val else "No"
+            else:
+                val_str = str(default_val)
+
+            if IS_COLAB:
+                print(f"  [✓] {display_name:<35} {val_str}")
+            else:
+                print(f"  {BBLACK}[✓]{R} {BCYAN}{display_name:<35}{R} {BGREEN}{val_str}{R}")
+            pause(0.02)
+
+        symptoms = DEFAULT_SYMPTOMS
+        if IS_COLAB:
+            print(f"\n  [✓] Symptoms: 5 symptoms loaded\n")
+        else:
+            print(f"\n  {BBLACK}[✓]{R} {BCYAN}Symptoms{R} {BGREEN}5 symptoms loaded{R}\n")
+        pause(0.5)
+    else:
+        # Manual entry
+        for idx, (field_name, field_type, display_name) in enumerate(fields, 1):
+            default_val = DEFAULT_VALUES.get(field_name) if use_defaults else None
+            if IS_COLAB:
+                val = input(f"  [{idx:2d}] ").strip()
+            else:
+                val = input(f"  {BBLACK}[{idx:2d}]{R} ").strip()
+            parsed = parse_value(val, field_type, default_val)
+            setattr(cond, field_name, parsed)
+
+        # Symptoms
+        print()
+        if IS_COLAB:
+            symptoms_input = input(f"  [19] ").strip()
+        else:
+            symptoms_input = input(f"  {BBLACK}[19]{R} ").strip()
+        if symptoms_input:
+            symptoms = [s.strip() for s in symptoms_input.split(",") if s.strip()]
+        elif use_defaults:
+            symptoms = DEFAULT_SYMPTOMS
+        else:
+            symptoms = []
+
+    return cond, symptoms
+
+# ═══════════════════════════ REPORT PRINTER ═════════════════════════════════
+def print_conditions_summary(cond: ColumnConditions):
+    print()
+    if IS_COLAB:
+        print("  OPERATING SNAPSHOT")
+    else:
+        print(f"  {BG_BBLACK}{BWHITE+BOLD}  OPERATING SNAPSHOT  {R}")
+    print()
+    kvs = [
+        ("Feed Rate",           f"{cond.feed_rate} kg/h"             if cond.feed_rate else "—"),
+        ("Design Feed Rate",    f"{cond.design_feed_rate} kg/h"      if cond.design_feed_rate else "—"),
+        ("Reflux Ratio (L/D)",  f"{cond.reflux_ratio}"               if cond.reflux_ratio else "—"),
+        ("Reboiler Duty",       f"{cond.reboiler_duty} % of design"  if cond.reboiler_duty else "—"),
+        ("Top Temperature",     f"{cond.top_temp} °C"                if cond.top_temp else "—"),
+        ("Bottom Temperature",  f"{cond.bottom_temp} °C"             if cond.bottom_temp else "—"),
+        ("Feed Temperature",    f"{cond.feed_temp} °C"               if cond.feed_temp else "—"),
+        ("ΔP per Tray",         f"{cond.dp_tray} kPa"                if cond.dp_tray else "—"),
+        ("Design ΔP per Tray",  f"{cond.design_dp_per_tray} kPa"     if cond.design_dp_per_tray else "—"),
+        ("Foaming Observed",    "YES ⚠" if cond.foaming_observed else "No" if cond.foaming_observed is False else "—"),
+        ("Vibrations",          "YES ⚠" if cond.vibration_observed else "No" if cond.vibration_observed is False else "—"),
+        ("Product Off-Spec",    "YES ⚠" if cond.product_off_spec else "No" if cond.product_off_spec is False else "—"),
+        ("Pressure Spike",      "YES ⚠" if cond.sudden_pressure_spike else "No" if cond.sudden_pressure_spike is False else "—"),
+    ]
+    # Two columns
+    half = math.ceil(len(kvs) / 2)
+    left, right = kvs[:half], kvs[half:]
+    for i in range(max(len(left), len(right))):
+        lk, lv = left[i] if i < len(left) else ("","")
+        rk, rv = right[i] if i < len(right) else ("","")
+        lc = BRED if "YES" in lv else BWHITE
+        rc = BRED if "YES" in rv else BWHITE
+        l_str = f"  {BCYAN}{lk:<22}{R} {lc}{lv:<18}{R}" if lk else " " * 44
+        r_str = f"  {BCYAN}{rk:<22}{R} {rc}{rv}{R}"     if rk else ""
+        print(l_str + r_str)
+    print()
+
+def print_score_gauge(score, max_score=100):
+    pct = min(score, max_score)
+    filled = int((pct / max_score) * 30)
+    if pct >= 70:   color = BRED
+    elif pct >= 45: color = BYELLOW
+    else:           color = BCYAN
+    bar = "█" * filled + "░" * (30 - filled)
+    return f"  {color}[{bar}] Score: {pct}{R}"
+
+def print_diagnosis(results: list, cond: ColumnConditions, symptoms: list):
+    import textwrap
+    clr()
+
+    if IS_COLAB:
+        # Simple header for Colab
+        print("=" * 80)
+        print(f"  DCIS — DIAGNOSIS REPORT".center(80))
+        print(f"  Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}".center(80))
+        print("=" * 80)
+    else:
+        # ── Header ──
+        hline("═", BBLUE)
+        print(f"{BBLUE}║{R}{BG_BBLACK}{BCYAN+BOLD}{'  DCIS  —  DIAGNOSIS REPORT':^78}{R}{BBLUE}║{R}")
+        print(f"{BBLUE}║{R}{BG_BBLACK}{BWHITE+DIM}{'  Generated: ' + datetime.now().strftime('%Y-%m-%d  %H:%M:%S'):^78}{R}{BBLUE}║{R}")
+        hline("═", BBLUE)
+
+    print_conditions_summary(cond)
+
+    if not results:
+        if IS_COLAB:
+            print("\n  >> NO SIGNIFICANT FAULTS DETECTED")
+            print("  Verify input values and maintain continuous monitoring.\n")
+        else:
+            print(f"\n  {BG_BGREEN+BLACK+BOLD}  ✅  NO SIGNIFICANT FAULTS DETECTED  {R}")
+            print(f"  {BWHITE}Verify input values and maintain continuous monitoring.{R}\n")
+        return
+
+    # ── Summary banner ──
+    if IS_COLAB:
+        print(f"\n  >> {len(results)} ISSUE(S) IDENTIFIED — REVIEW ALL BEFORE TAKING ACTION")
+    else:
+        print(f"  {BG_BRED+BWHITE+BOLD}  ⚠   {len(results)} ISSUE(S) IDENTIFIED — REVIEW ALL BEFORE TAKING ACTION  {R}")
+    print()
+
+    # ── Fault cards ──
+    for idx, r_dict in enumerate(results, 1):
+        r = DiagnosisResult(**r_dict)
+        p = PROBLEMS[r.problem]
+        icon = p["icon"]; pcol = p["color"]
+
+        if IS_COLAB:
+            # Simple card for Colab
+            print("=" * 80)
+            print(f"  [{idx}/{len(results)}] {r.problem.replace('_',' ')} {icon}")
+            print(f"  Severity: {r.severity} | Confidence: {r.confidence} | Score: {r.score}")
+            print("-" * 80)
+            print(f"  {r.description}")
+            print()
+        else:
+            # Card top border
+            hline("═", pcol)
+            title = f"  {icon}  [{idx}/{len(results)}]  {r.problem.replace('_',' ')}  "
+            sbadge = severity_badge(r.severity)
+            cbadge = confidence_badge(r.confidence)
+            print(f"{pcol}{BOLD}{title}{R}  {sbadge}  {cbadge}")
+            print(print_score_gauge(r.score))
+            thin_line(BBLACK)
+            print(f"  {DIM}{ITAL}{r.description}{R}")
+            print()
+
+        # ── Gemini AI commentary ──
+        if r.ai_commentary:
+            if IS_COLAB:
+                print("  >> GEMINI AI EXPERT COMMENTARY")
+                print()
+                for line in textwrap.wrap(r.ai_commentary, width=74):
+                    print(f"    {line}")
+                print()
+            else:
+                print(f"  {BG_BMAG+BWHITE+BOLD}  🤖  GEMINI AI EXPERT COMMENTARY  {R}")
+                print()
+                for line in textwrap.wrap(r.ai_commentary, width=74):
+                    print(f"    {BMAG}{line}{R}")
+                print()
+
+        # Symptoms matched
+        if r.symptoms_matched:
+            if IS_COLAB:
+                print("  TRIGGERS MATCHED:")
+                for s in r.symptoms_matched:
+                    print(f"    ✓ {s}")
+                print()
+            else:
+                print(f"  {BOLD}{BYELLOW}◈  TRIGGERS MATCHED{R}")
+                for s in r.symptoms_matched:
+                    print(f"    {BGREEN}✓{R}  {BWHITE}{s}{R}")
+                print()
+
+        # Root causes
+        if IS_COLAB:
+            print("  LIKELY ROOT CAUSES:")
+            for i, rc in enumerate(r.root_causes, 1):
+                print(f"    {i}. {rc}")
+            print()
+        else:
+            print(f"  {BOLD}{BCYAN}◈  LIKELY ROOT CAUSES{R}")
+            for i, rc in enumerate(r.root_causes, 1):
+                print(f"    {BBLACK}{i}.{R}  {WHITE}{rc}{R}")
+            print()
+
+        # Corrective actions
+        if IS_COLAB:
+            print("  CORRECTIVE ACTIONS — TAKE IMMEDIATELY:")
+            print()
+            for ca in r.corrective_actions:
+                print(f"    {ca}")
+            print()
+        else:
+            print(f"  {BG_BRED+BWHITE+BOLD}  ⚡  CORRECTIVE ACTIONS — TAKE IMMEDIATELY  {R}")
+            print()
+            for ca in r.corrective_actions:
+                print(f"    {BWHITE}{ca}{R}")
+            print()
+
+        # Preventive measures
+        if IS_COLAB:
+            print("  PREVENTIVE MEASURES — LONG TERM:")
+            print()
+            for pm in r.preventive_measures:
+                print(f"    • {pm}")
+            print()
+        else:
+            print(f"  {BG_BGREEN+BLACK+BOLD}  🛡   PREVENTIVE MEASURES — LONG TERM  {R}")
+            print()
+            for pm in r.preventive_measures:
+                print(f"    {BGREEN}▸{R}  {BWHITE}{pm}{R}")
+            print()
+
+    if IS_COLAB:
+        print("=" * 80)
+    else:
+        hline("═", BBLUE)
+
+def save_report(results, cond, symptoms):
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fn = f"DCIS_Report_{ts}.json"
+    data = {
+        "timestamp": ts,
+        "conditions": {k: v for k, v in vars(cond).items() if v is not None},
+        "symptoms_described": symptoms,
+        "diagnosis": results,
+    }
+    with open(fn, "w") as f:
+        json.dump(data, f, indent=2)
+
+    if IS_COLAB:
+        print(f"\n  Report saved: {fn}")
+    else:
+        print(f"\n  {BGREEN}📁  Report saved  →  {ULINE}{fn}{R}")
+    return fn
+
+# ═══════════════════════════ DEMO SCENARIO ══════════════════════════════════
+def run_demo():
+    cond = ColumnConditions(
+        feed_rate=5800, design_feed_rate=5000, reflux_ratio=3.2,
+        reboiler_duty=118, top_temp=78.5, bottom_temp=142.0, feed_temp=95.0,
+        top_pressure=110.0, bottom_pressure=128.0,
+        dp_tray=1.85, design_dp_per_tray=0.85, num_trays=35,
+        distillate_flow=320, bottoms_flow=1100,
+        foaming_observed=True, vibration_observed=True,
+        product_off_spec=True, sudden_pressure_spike=True,
+    )
+    symptoms = [
+        "sudden pressure spike in last 2 hours",
+        "bottom liquid level dropping unexpectedly",
+        "knocking sounds from lower tray section",
+        "distillate product going off-spec",
+        "foamy liquid visible in reflux drum sight glass",
+    ]
+    return cond, symptoms
+
+# ═══════════════════════════ MAIN MENU ══════════════════════════════════════
+def main_menu():
+    print()
+    if IS_COLAB:
+        # Simple menu for Colab
+        print("-" * 80)
+        print("  Choose Mode:")
+        print()
+        print("    [1]  Enter column data manually")
+        print("    [2]  Quick input with defaults (press Enter to accept)")
+        print("    [3]  Full auto demo (Flooding + Foaming scenario)")
+        print("    [4]  Exit")
+        print()
+        print("-" * 80)
+        return input("  Select (1/2/3/4): ").strip()
+
+    # Original colorful menu for terminal
+    hline("—", BBLACK)
+    print(f"  {BOLD}{BWHITE}Choose Mode:{R}")
+    print()
+    print(f"    {BCYAN+BOLD}[1]{R}  {BWHITE}Enter column data manually{R}")
+    print(f"    {BGREEN+BOLD}[2]{R}  {BWHITE}Quick input with defaults  {DIM}(press Enter to accept){R}")
+    print(f"    {BYELLOW+BOLD}[3]{R}  {BWHITE}Full auto demo  {DIM}(Flooding + Foaming scenario){R}")
+    print(f"    {BRED+BOLD}[4]{R}  {BWHITE}Exit{R}")
+    print()
+    hline("—", BBLACK)
+    return input(f"  {BCYAN}❯{R}  {BWHITE}Select (1/2/3/4): {R}").strip()
+
+def main():
+    splash()
+
+    while True:
+        choice = main_menu()
+
+        if choice == "4":
+            if IS_COLAB:
+                print("\n  Goodbye! Stay safe on the plant floor.\n")
+            else:
+                print(f"\n  {BBLUE}Goodbye! Stay safe on the plant floor. ⚗{R}\n")
+            break
+
+        elif choice == "3":
+            if IS_COLAB:
+                print("\n  >> FULL AUTO DEMO — Flooding + Foaming Scenario\n")
+                print("  Loading demo scenario...")
+            else:
+                print(f"\n  {BYELLOW}{BOLD}► FULL AUTO DEMO — Flooding + Foaming Scenario{R}\n")
+                print(f"  {BCYAN}⚙ Loading demo scenario...{R}")
+            cond, symptoms = run_demo()
+            if IS_COLAB:
+                print("  Demo loaded\n")
+            else:
+                print(f"  {BGREEN}✓ Demo loaded{R}")
+
+        elif choice == "2":
+            if IS_COLAB:
+                print("\n  >> QUICK INPUT MODE — Press Enter to use defaults\n")
+            else:
+                print(f"\n  {BGREEN}{BOLD}► QUICK INPUT MODE — Press Enter to use defaults{R}\n")
+            pause(0.5)
+            cond, symptoms = collect_inputs_batch(use_defaults=True)
+
+        else:
+            cond, symptoms = collect_inputs_batch(use_defaults=False)
+
+        # Process with LangGraph workflow
+        print()
+        if IS_COLAB:
+            print("  >> USING LANGGRAPH + GEMINI AI WORKFLOW")
+            print()
+            print("  Initializing LangGraph workflow...")
+            print("  Building diagnosis graph with 3 nodes...")
+        else:
+            print(f"  {BG_BGREEN}{BLACK+BOLD}  🤖 USING LANGGRAPH + GEMINI AI WORKFLOW  {R}")
+            print()
+            print(f"  {BCYAN}⚙ Initializing LangGraph workflow...{R}")
+            print(f"  {DIM}Building diagnosis graph with 3 nodes...{R}")
+
+        # Build graph
+        app = build_diagnosis_graph()
+        if IS_COLAB:
+            print("  Graph ready")
+        else:
+            print(f"  {BGREEN}✓ Graph ready{R}")
+
+        # Prepare state
+        initial_state = {
+            "conditions": {k: v for k, v in asdict(cond).items() if v is not None},
+            "symptoms": symptoms,
+            "rule_based_results": [],
+            "enriched_results": [],
+            "ai_commentary": {},
+            "final_diagnosis": [],
+            "processing_stage": "initiated",
+            "errors": []
+        }
+
+        # Run workflow
+        if IS_COLAB:
+            print("  Executing workflow pipeline...")
+        else:
+            print(f"  {BCYAN}⚙ Executing workflow pipeline...{R}")
+        final_state = app.invoke(initial_state)
+        results = final_state["final_diagnosis"]
+        print()
+        if IS_COLAB:
+            print("  LangGraph workflow complete")
+        else:
+            print(f"  {BGREEN}✓ LangGraph workflow complete{R}")
+
+        print_diagnosis(results, cond, symptoms)
+
+        if results:
+            if IS_COLAB:
+                ans = input("\n  Save report to JSON? (y/n): ").strip().lower()
+            else:
+                ans = input(f"\n  {BOLD}{BWHITE}Save report to JSON?{R}  {BBLACK}(y/n){R}: ").strip().lower()
+            if ans == "y":
+                save_report(results, cond, symptoms)
+
+        if IS_COLAB:
+            print("\n  >> Analysis Complete.\n")
+            again = input("  Run another diagnosis? (y/n): ").strip().lower()
+        else:
+            print(f"\n  {BG_BBLACK}{BCYAN+BOLD}  ✅  Analysis Complete.  {R}\n")
+            again = input(f"  {BWHITE}Run another diagnosis? (y/n): {R}").strip().lower()
+        if again != "y":
+            if IS_COLAB:
+                print("\n  Goodbye! Stay safe on the plant floor.\n")
+            else:
+                print(f"\n  {BBLUE}Stay safe on the plant floor. ⚗{R}\n")
+            break
+
+if __name__ == "__main__":
+    main()
